@@ -24,7 +24,8 @@ import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from reelvault import ig, library, session
+from reelvault import ig, library, session, sources
+from reelvault.ytdlp import ytdlp_version
 from reelvault.jobs import JobManager
 from reelvault.store import Store
 
@@ -156,6 +157,7 @@ def postprocess(username):
     d = lib_dir(username)
     try:
         library.flatten(d)
+        library.prune_playlist_meta(d)
         renamed = library.title_all(d)
     except Exception:
         renamed = 0
@@ -315,6 +317,8 @@ class Handler(BaseHTTPRequestHandler):
             job = STORE.active_job(a["id"])
             accounts.append({
                 "id": a["id"], "username": a["username"],
+                "kind": a.get("kind") or "instagram",
+                "target": a.get("target") or a["username"],
                 "total_posts": a["total_posts"], "quality": a["quality"],
                 "saved": len(items),
                 "size_bytes": sum(i["bytes"] for i in items),
@@ -323,7 +327,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.json({
             "accounts": accounts,
             "deps": {"gallery_dl": {"ok": gd_ok, "version": gd_ver},
-                     "yt_dlp": {"ok": yt_ok, "version": yt_ver},
+                     "yt_dlp": {"ok": bool(yt_ok), "version": ytdlp_version()},
                      "ffmpeg": bool(ffmpeg_bin())},
             "session": {"present": os.path.exists(JAR), "logged_in": ig.logged_in(JAR)},
         })
@@ -341,20 +345,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_add_account(self):
         body = self.body()
-        username = (body.get("username") or "").strip().lstrip("@/").rstrip("/")
-        username = username.split("/")[-1]
-        if not USER_RE.match(username):
-            return self.json({"ok": False, "error": "invalid username"}, 400)
-        if not ig.logged_in(JAR):
+        raw = body.get("source") or body.get("username") or ""
+        try:
+            kind, target, label = sources.detect(raw)
+        except Exception as e:
+            return self.json({"ok": False, "error": str(e)}, 400)
+
+        if kind == "instagram" and not ig.logged_in(JAR):
             return self.json({"ok": False, "error": "not_connected"}, 409)
-        total = ig.profile_total(JAR, username)
-        # Instagram only exposes the post count through GraphQL these days, so a
-        # 0 here means "unknown", not "no such account" — the scrape itself proves
-        # the handle exists.
-        acc = STORE.add_account(username, total)
-        os.makedirs(lib_dir(username), exist_ok=True)
-        os.makedirs(os.path.dirname(archive_path(username)), exist_ok=True)
-        return self.json({"ok": True, "account": {"id": acc["id"], "username": username,
+
+        total = 0
+        if kind == "instagram":
+            total = ig.profile_total(JAR, target)   # 0 = unknown, not fatal
+        acc = STORE.add_account(label, total, kind, target)
+        os.makedirs(lib_dir(label), exist_ok=True)
+        os.makedirs(os.path.dirname(archive_path(label)), exist_ok=True)
+        return self.json({"ok": True, "account": {"id": acc["id"], "username": label,
+                                                  "kind": kind, "target": target,
                                                   "total_posts": total}})
 
     def api_delete(self, aid):
@@ -388,14 +395,23 @@ class Handler(BaseHTTPRequestHandler):
         limit_n = int(body.get("limit") or 0)
         quality = body.get("quality") or acc["quality"] or "720p"
         STORE.set_quality(aid, quality)
-        total = acc["total_posts"] or ig.profile_total(JAR, acc["username"])
-        expected = min(limit_n, total) if limit_n else total
+        kind = acc.get("kind") or "instagram"
+        if kind == "instagram" and not ig.logged_in(JAR):
+            return self.json({"ok": False, "error": "not_connected"}, 409)
+        total = acc["total_posts"] if kind == "instagram" else 0
+        if kind == "instagram" and not total:
+            total = ig.profile_total(JAR, acc.get("target") or acc["username"])
+        expected = min(limit_n, total) if (limit_n and total) else (limit_n or total)
         jid = STORE.new_job(aid, expected, limit_n, quality)
+        env = subprocess_env()
+        ff = ffmpeg_bin()
+        if ff:
+            env["REELVAULT_FFMPEG"] = ff
+        cmd = sources.build_command(acc, JAR, lib_dir(acc["username"]),
+                                    archive_path(acc["username"]), quality, limit_n)
         job = JOBS.create(jid=jid, account=acc["username"], dest=lib_dir(acc["username"]),
-                          jar=JAR, archive=archive_path(acc["username"]), quality=quality,
-                          limit_n=limit_n, gallery_dl=sys.executable,
-                          subprocess_env=subprocess_env())
-        job.expected = expected
+                          cmd=cmd, expected=expected, limit_n=limit_n, quality=quality,
+                          subprocess_env=env)
         job.start()
 
         def finalize():

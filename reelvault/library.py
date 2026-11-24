@@ -79,6 +79,9 @@ def title_all(lib_dir):
     for path in sorted(glob.glob(os.path.join(lib_dir, "*.mp4"))):
         meta = {}
         jpath = path + ".json"
+        # yt-dlp already names files "<date>_<id>_<title>.mp4" — leave those alone
+        if os.path.exists(path[:-4] + ".info.json") or os.path.exists(path + ".info.json"):
+            continue
         if os.path.exists(jpath):
             try:
                 meta = json.load(open(jpath))
@@ -112,14 +115,40 @@ def title_all(lib_dir):
 
 
 def _meta_for(mp4_path):
-    """gallery-dl writes <id>.mp4.json; after retitling we store <title>.json."""
-    for cand in (mp4_path + ".json", mp4_path[:-4] + ".json"):
+    """Sidecar metadata for either downloader.
+
+    gallery-dl writes <name>.mp4.json (or <name>.json after retitling);
+    yt-dlp writes <name>.info.json. Both are normalised to the instagram shape.
+    """
+    stem = mp4_path[:-4]
+    for cand in (mp4_path + ".json", stem + ".json",
+                 stem + ".info.json", mp4_path + ".info.json"):
         if os.path.exists(cand):
             try:
-                return json.load(open(cand))
+                return _normalise(json.load(open(cand)))
             except Exception:
                 return {}
     return {}
+
+
+def _normalise(meta):
+    """yt-dlp info.json -> the field names the rest of the app expects."""
+    if not isinstance(meta, dict):
+        return {}
+    if meta.get("upload_date") or meta.get("webpage_url"):
+        raw = str(meta.get("upload_date") or "")
+        date = ("%s-%s-%s 00:00:00" % (raw[:4], raw[4:6], raw[6:8])) if len(raw) == 8 else ""
+        return {
+            "description": meta.get("description") or "",
+            "title": meta.get("title"),
+            "date": date,
+            "likes": meta.get("like_count") or 0,
+            "shortcode": meta.get("id") or "",
+            "post_url": meta.get("webpage_url") or "",
+            "tags": meta.get("tags") or [],
+            "audio_title": None,
+        }
+    return meta
 
 
 HASHTAG_RE = re.compile(r"#([\w\u00c0-\u024f]{1,60})", re.UNICODE)
@@ -136,7 +165,33 @@ def hashtags_of(meta):
         if low not in seen:
             seen.add(low)
             out.append(tag)
+    # yt-dlp exposes YouTube tags separately from the description
+    for tag in (meta.get("tags") or []):
+        tag = str(tag).strip().replace(" ", "")
+        low = tag.lower()
+        if tag and low not in seen:
+            seen.add(low)
+            out.append(tag)
     return out
+
+
+def prune_playlist_meta(lib_dir):
+    """yt-dlp writes playlist-level metadata (NA_<channel>.info.json/.jpg) when the
+    source is a channel tab — drop it so the library is only real media."""
+    removed = 0
+    try:
+        names = os.listdir(lib_dir)
+    except OSError:
+        return 0
+    for name in names:
+        if name.startswith("NA_") and (name.endswith(".info.json") or name.endswith(".jpg")
+                                       or name.endswith(".webp")):
+            try:
+                os.remove(os.path.join(lib_dir, name))
+                removed += 1
+            except OSError:
+                pass
+    return removed
 
 
 def shortcode_of(mp4_path):
@@ -156,6 +211,10 @@ def library(lib_dir):
         meta = _meta_for(path)
         cap = caption_of(meta)
         first_line = cap.split("\n")[0].strip()
+        real_title = (meta.get("title") or "").strip()
+        audio = (meta.get("audio_title") or "").strip()
+        if audio.lower() in ("original audio", "original-audio", "original sound"):
+            audio = ""
         st = os.stat(path)
         items.append({
             "file": name,
@@ -164,9 +223,12 @@ def library(lib_dir):
             "date": (meta.get("date") or "")[:19],
             "likes": meta.get("likes") or 0,
             "shortcode": meta.get("shortcode") or "",
-            "title": first_line[:120] if first_line else name[:-4],
-            "caption": cap,
+            # a real title (YouTube) beats a caption line, which beats the filename
+            "title": (real_title or first_line or name[:-4])[:120],
+            "caption": cap or real_title,
             "hashtags": hashtags_of(meta),
+            "audio": audio,
+            "has_caption": bool(cap),
             "url": meta.get("post_url") or "",
         })
     items.sort(key=lambda x: x["date"] or "", reverse=True)

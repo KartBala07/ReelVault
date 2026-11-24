@@ -4,6 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ReelVault — Instagram reel archiver</title>
+<script>
+  // apply the saved theme before first paint (no flash)
+  try {
+    var t = localStorage.getItem("reelvault.theme");
+    if (!t) t = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -16,6 +24,7 @@
     <a href="https://github.com/KartBala07/ReelVault" target="_blank" rel="noopener">Source</a>
   </nav>
   <div class="nav-right">
+    <button class="pill theme-pill" id="themeBtn" title="Switch between light and dark"><span id="themeIcon">☾</span><span id="themeLabel">Dark</span></button>
     <button class="pill" id="sessionPill"><span class="dot off" id="sessionDot"></span><span id="sessionText">Checking…</span></button>
     <button class="pill" id="revealBtn">Open folder</button>
     <button class="pill" id="csvBtn">Export CSV</button>
@@ -119,14 +128,19 @@
 
 <div class="modal" id="modal">
   <div class="box">
-    <video id="player" controls playsinline></video>
+    <button class="modal-close" id="mClose" aria-label="Close">✕</button>
+    <video id="player" controls playsinline preload="metadata"></video>
     <div class="mrow">
-      <div style="min-width:0;flex:1">
+      <div class="info">
         <div class="t" id="mTitle"></div>
         <div class="m" id="mMeta"></div>
         <div class="tags" id="mTags"></div>
+        <div class="desc" id="mDesc"></div>
       </div>
-      <a class="btn" id="mLink" target="_blank" rel="noopener" style="display:none">Open on IG ↗</a>
+      <div style="display:flex;flex-direction:column;gap:6px;flex:0 0 auto">
+        <a class="btn" id="mLink" target="_blank" rel="noopener" style="display:none">Open on IG ↗</a>
+        <a class="btn btn-ghost" id="mFile" target="_blank" rel="noopener">Open file ↗</a>
+      </div>
     </div>
   </div>
 </div>

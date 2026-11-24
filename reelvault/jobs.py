@@ -10,23 +10,21 @@ from . import ig
 
 
 class Job(object):
-    def __init__(self, jid, account, dest, jar, archive, quality, limit_n,
-                 gallery_dl, subprocess_env=None):
+    def __init__(self, jid, account, dest, cmd, expected=0, limit_n=0, quality="720p",
+                 subprocess_env=None):
         self.id = jid
         self.account = account
         self.dest = dest
-        self.jar = jar
-        self.archive = archive
+        self.cmd = cmd
         self.quality = quality
         self.limit_n = limit_n
-        self.gallery_dl = gallery_dl
         self.env = subprocess_env
         self.proc = None
         self.status = "running"
         self.started = time.time()
         self.finished = None
         self.downloaded = 0
-        self.expected = 0
+        self.expected = expected
         self.lines = []
         self.subs = []
         self._lock = threading.Lock()
@@ -72,8 +70,7 @@ class Job(object):
         return n
 
     def _run(self):
-        cmd = ig.gallery_dl_cmd(self.jar, self.account, self.dest, self.archive,
-                                self.quality, self.limit_n)
+        cmd = self.cmd
         self.emit("$ " + " ".join(cmd), "cmd")
         before = self._count_files()
         try:

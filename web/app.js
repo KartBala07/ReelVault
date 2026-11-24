@@ -90,11 +90,12 @@ function renderAccounts() {
   for (const a of STATE.accounts) {
     const el = document.createElement("div");
     el.className = "acc-card" + (a.id === CURRENT ? " active" : "");
+    const kindLabel = a.kind === "youtube" ? "YT shorts" : a.kind === "link" ? "single link" : "Instagram";
     el.innerHTML = `
-      <div class="ava">${esc(a.username[0])}</div>
+      <div class="ava">${esc((a.username || "?")[0])}</div>
       <div>
-        <div class="acc-name">@${esc(a.username)}</div>
-        <div class="acc-sub">${fmtNum(a.saved)} saved${a.total_posts ? " / " + fmtNum(a.total_posts) : ""}</div>
+        <div class="acc-name">${esc(a.kind === "instagram" ? "@" + a.username : a.username)}</div>
+        <div class="acc-sub">${fmtNum(a.saved)} saved${a.total_posts ? " / " + fmtNum(a.total_posts) : ""} · ${kindLabel}</div>
       </div>
       ${a.job ? '<span class="busy"></span>' : ""}`;
     el.onclick = () => { CURRENT = a.id; renderAccounts(); renderMain(); };
@@ -103,7 +104,7 @@ function renderAccounts() {
 
   const add = document.createElement("div");
   add.className = "add-card";
-  add.innerHTML = `<input id="newAccount" placeholder="@username" autocomplete="off" spellcheck="false">
+  add.innerHTML = `<input id="newAccount" placeholder="profile, channel or link" autocomplete="off" spellcheck="false">
     <button id="addBtn">Add</button>`;
   box.appendChild(add);
   $("#addBtn").onclick = addAccount;
@@ -162,15 +163,16 @@ function renderMain() {
   }
 
   dl.style.display = "";
-  $("#accTitle").textContent = "@" + a.username;
+  const noun = a.kind === "youtube" ? "shorts" : a.kind === "link" ? "video" : "reels";
+  $("#accTitle").textContent = a.kind === "instagram" ? "@" + a.username : a.username;
   const chip = $("#accChip");
   chip.style.display = "";
   chip.textContent = `${fmtNum(a.saved)} saved · ${fmtBytes(a.size_bytes)}`;
   $("#badgeSaved").textContent = `${fmtNum(a.saved)} saved`;
-  $("#badgeQuality").textContent = a.quality || "720p";
-  $("#dlTitle").textContent = `Download new reels from @${a.username}`;
+  $("#badgeQuality").textContent = a.kind === "link" ? "best" : (a.quality || "720p");
+  $("#dlTitle").textContent = `Download new ${noun} from ${a.kind === "instagram" ? "@" + a.username : a.username}`;
   $("#quality").value = a.quality || "720p";
-  $("#scrapeBtn").disabled = !STATE.session.logged_in;
+  $("#scrapeBtn").disabled = (a.kind === "instagram") && !STATE.session.logged_in;
   $$("#viewSeg button").forEach((b) => b.classList.toggle("on", b.dataset.view === VIEW));
   if (a.job) setRunning(a.job); else setRunning(null);
   loadPosts(a.id);
@@ -226,7 +228,7 @@ function renderTable(lib) {
   const rows = POSTS.map((p) => {
     const sc = encodeURIComponent(p.shortcode || "");
     const tags = (p.hashtags || []).map((h) => "#" + h).join(" ");
-    const cap = (p.caption || "").replace(/\s+/g, " ").trim();
+    const cap = (p.caption || "").replace(/\s+/g, " ").trim() || (p.audio ? `♪ ${p.audio}` : "");
     return `<tr data-sc="${sc}">
       <td class="th"><img class="mini" loading="lazy" src="/thumb/${user}/${sc}.jpg" alt=""
            onerror="this.classList.add('noimg')"></td>
@@ -256,10 +258,27 @@ function renderTable(lib) {
 // ---------------------------------------------------------------- player
 function play(p) {
   const a = account();
-  $("#player").src = `/media/${encodeURIComponent(a.username)}/${encodeURIComponent(p.file)}`;
+  const url = `/media/${encodeURIComponent(a.username)}/${encodeURIComponent(p.file)}`;
+  const player = $("#player");
+  player.src = url;
+  player.poster = `/thumb/${encodeURIComponent(a.username)}/${encodeURIComponent(p.shortcode || "")}.jpg`;
+  $("#mFile").href = url;
+  $("#mFile").setAttribute("download", p.file);
   $("#mTitle").textContent = p.title;
   $("#mMeta").textContent = `${(p.date || "").slice(0, 10)} · ${fmtNum(p.likes)} likes · ${fmtBytes(p.bytes)}`;
-  $("#mTags").textContent = (p.hashtags || []).map((h) => "#" + h).join("  ");
+  $("#mTags").textContent = (p.hashtags || []).length
+    ? (p.hashtags || []).map((h) => "#" + h).join("  ")
+    : "";
+  const desc = $("#mDesc");
+  if (p.caption) {
+    desc.textContent = p.caption;
+    desc.className = "desc";
+  } else {
+    desc.textContent = p.audio
+      ? `No caption on this post · audio: ${p.audio}`
+      : "No caption on this post — Instagram returns an empty description for it.";
+    desc.className = "desc none";
+  }
   const link = $("#mLink");
   if (p.url) { link.href = p.url; link.style.display = ""; } else link.style.display = "none";
   $("#modal").classList.add("on");
@@ -270,6 +289,7 @@ function closeModal() {
   $("#player").pause();
   $("#player").src = "";
 }
+$("#mClose").onclick = closeModal;
 $("#modal").addEventListener("click", (e) => { if (e.target === $("#modal")) closeModal(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
 
@@ -286,14 +306,15 @@ async function importSession() {
 async function addAccount() {
   const input = $("#newAccount");
   if (!input) return;
-  const username = input.value.trim().replace(/^@/, "");
-  if (!username) return;
+  const source = input.value.trim();
+  if (!source) return;
   const btn = $("#addBtn");
   btn.disabled = true; btn.textContent = "…";
   try {
-    const r = await api("/api/accounts", { method: "POST", body: JSON.stringify({ username }) });
+    const r = await api("/api/accounts", { method: "POST", body: JSON.stringify({ source }) });
     input.value = "";
-    toast(`Added @${r.account.username}`);
+    const kind = r.account.kind;
+    toast(`Added ${r.account.username}${kind !== "instagram" ? " (" + kind + ")" : ""}`);
     CURRENT = r.account.id;
     await load();
   } catch (e) {
@@ -416,5 +437,21 @@ function subscribe(jid) {
 }
 
 // ---------------------------------------------------------------- boot
+function applyTheme(t) {
+  document.documentElement.setAttribute("data-theme", t);
+  try { localStorage.setItem("reelvault.theme", t); } catch (e) {}
+  const btn = $("#themeBtn");
+  const icon = $("#themeIcon");
+  const label = $("#themeLabel");
+  if (icon) icon.textContent = t === "dark" ? "☀" : "☾";
+  if (label) label.textContent = t === "dark" ? "Light" : "Dark";
+  if (btn) btn.title = t === "dark" ? "Switch to light mode" : "Switch to dark mode";
+}
+$("#themeBtn").onclick = () => {
+  const cur = document.documentElement.getAttribute("data-theme");
+  applyTheme(cur === "dark" ? "light" : "dark");
+};
+applyTheme(document.documentElement.getAttribute("data-theme") || "light");
+
 load().catch((e) => toast(e.message, true));
 setInterval(() => { if (!ES) load().catch(() => {}); }, 20000);

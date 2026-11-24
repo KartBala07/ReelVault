@@ -22,7 +22,9 @@ class Store(object):
             created_at REAL NOT NULL,
             total_posts INTEGER DEFAULT 0,
             quality TEXT DEFAULT '720p',
-            last_run REAL
+            last_run REAL,
+            kind TEXT DEFAULT 'instagram',
+            target TEXT
         );
         CREATE TABLE IF NOT EXISTS jobs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,17 +39,23 @@ class Store(object):
             message TEXT DEFAULT ''
         );
         """)
+        # migrate older databases that predate multi-source support
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(accounts)").fetchall()}
+        if "kind" not in cols:
+            self.db.execute("ALTER TABLE accounts ADD COLUMN kind TEXT DEFAULT 'instagram'")
+        if "target" not in cols:
+            self.db.execute("ALTER TABLE accounts ADD COLUMN target TEXT")
         self.db.commit()
 
     # ---- accounts ----
-    def add_account(self, username, total=0):
+    def add_account(self, username, total=0, kind="instagram", target=None):
         cur = self.db.execute(
-            "INSERT OR IGNORE INTO accounts (username, created_at, total_posts) VALUES (?,?,?)",
-            (username, time.time(), total))
-        if cur.rowcount and total:
-            pass
-        elif total:
-            self.db.execute("UPDATE accounts SET total_posts=? WHERE username=?", (total, username))
+            "INSERT OR IGNORE INTO accounts (username, created_at, total_posts, kind, target) "
+            "VALUES (?,?,?,?,?)",
+            (username, time.time(), total, kind, target or username))
+        if total:
+            self.db.execute("UPDATE accounts SET total_posts=?, kind=COALESCE(kind,?), target=? "
+                            "WHERE username=?", (total, kind, target or username, username))
         self.db.commit()
         return self.account(username)
 
