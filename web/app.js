@@ -7,6 +7,8 @@ let CURRENT = null;      // account id
 let POSTS = [];
 let VIEW = localStorage.getItem("reelvault.view") || "grid";
 let ES = null;
+let POSTED = {};                 // file -> {status, when, posted_as}
+const SELECT = new Set();        // files picked for posting
 
 // ---------------------------------------------------------------- helpers
 const fmtBytes = (b) => {
@@ -90,21 +92,20 @@ function renderAccounts() {
   for (const a of STATE.accounts) {
     const el = document.createElement("div");
     el.className = "acc-card" + (a.id === CURRENT ? " active" : "");
-    const kindLabel = a.kind === "youtube" ? "YT shorts" : a.kind === "link" ? "single link" : "Instagram";
     el.innerHTML = `
       <div class="ava">${esc((a.username || "?")[0])}</div>
       <div>
-        <div class="acc-name">${esc(a.kind === "instagram" ? "@" + a.username : a.username)}</div>
-        <div class="acc-sub">${fmtNum(a.saved)} saved${a.total_posts ? " / " + fmtNum(a.total_posts) : ""} · ${kindLabel}</div>
+        <div class="acc-name">@${esc(a.username)}</div>
+        <div class="acc-sub">${fmtNum(a.saved)} saved${a.total_posts ? " / " + fmtNum(a.total_posts) : ""}</div>
       </div>
       ${a.job ? '<span class="busy"></span>' : ""}`;
-    el.onclick = () => { CURRENT = a.id; renderAccounts(); renderMain(); };
+    el.onclick = () => { CURRENT = a.id; SELECT.clear(); renderAccounts(); renderMain(); };
     box.appendChild(el);
   }
 
   const add = document.createElement("div");
   add.className = "add-card";
-  add.innerHTML = `<input id="newAccount" placeholder="profile, channel or link" autocomplete="off" spellcheck="false">
+  add.innerHTML = `<input id="newAccount" placeholder="@username" autocomplete="off" spellcheck="false">
     <button id="addBtn">Add</button>`;
   box.appendChild(add);
   $("#addBtn").onclick = addAccount;
@@ -150,6 +151,7 @@ function renderMain() {
     $("#accTitle").textContent = "Library";
     $("#accChip").style.display = "none";
     dl.style.display = "none";
+    $("#postCard").style.display = "none";
     $("#progress").classList.remove("on");
     POSTS = [];
     renderHero();
@@ -163,27 +165,47 @@ function renderMain() {
   }
 
   dl.style.display = "";
-  const noun = a.kind === "youtube" ? "shorts" : a.kind === "link" ? "video" : "reels";
-  $("#accTitle").textContent = a.kind === "instagram" ? "@" + a.username : a.username;
+  $("#accTitle").textContent = "@" + a.username;
   const chip = $("#accChip");
   chip.style.display = "";
   chip.textContent = `${fmtNum(a.saved)} saved · ${fmtBytes(a.size_bytes)}`;
   $("#badgeSaved").textContent = `${fmtNum(a.saved)} saved`;
-  $("#badgeQuality").textContent = a.kind === "link" ? "best" : (a.quality || "720p");
-  $("#dlTitle").textContent = `Download new ${noun} from ${a.kind === "instagram" ? "@" + a.username : a.username}`;
+  $("#badgeQuality").textContent = a.quality || "720p";
+  $("#dlTitle").textContent = `Download new reels from @${a.username}`;
   $("#quality").value = a.quality || "720p";
-  $("#scrapeBtn").disabled = (a.kind === "instagram") && !STATE.session.logged_in;
+  $("#scrapeBtn").disabled = !STATE.session.logged_in;
+  $("#postCard").style.display = "";
+  $("#postAccount").textContent = a.username;
   $$("#viewSeg button").forEach((b) => b.classList.toggle("on", b.dataset.view === VIEW));
   if (a.job) setRunning(a.job); else setRunning(null);
   loadPosts(a.id);
 }
 
 async function loadPosts(id) {
-  const res = await api(`/api/accounts/${id}/posts?limit=2000`);
+  const [res, posted] = await Promise.all([
+    api(`/api/accounts/${id}/posts?limit=2000`),
+    api(`/api/accounts/${id}/posted`).catch(() => ({ posted: {} })),
+  ]);
   POSTS = res.items;
+  POSTED = posted.posted || {};
   renderHero();
   renderStats();
   renderLibrary();
+  renderPostCard();
+}
+
+function unpostedCount() {
+  return POSTS.filter((p) => (POSTED[p.file] || {}).status !== "posted").length;
+}
+
+function renderPostCard() {
+  const a = account();
+  if (!a) return;
+  $("#postAccount").textContent = a.username;
+  $("#badgeUnposted").textContent = `${fmtNum(unpostedCount())} unposted`;
+  $("#badgeSelected").textContent = SELECT.size ? `${SELECT.size} selected` : "none selected";
+  $("#publishBtn").textContent = SELECT.size ? `Publish ${SELECT.size} →` : "Publish →";
+  $("#dryBtn").textContent = SELECT.size ? `Dry run ${SELECT.size}` : "Dry run";
 }
 
 // ---------------------------------------------------------------- library
@@ -208,15 +230,26 @@ function renderLibrary() {
     const tagline = (p.hashtags || []).slice(0, 3).map((h) => "#" + h).join(" ");
     const tile = document.createElement("div");
     tile.className = "tile";
+    const st = (POSTED[p.file] || {}).status;
     tile.innerHTML = `
       <img class="thumb" loading="lazy" src="/thumb/${user}/${sc}.jpg" alt=""
            onerror="this.classList.add('noimg')">
+      <label class="pick" title="Select for posting">
+        <input type="checkbox" ${SELECT.has(p.file) ? "checked" : ""}>
+      </label>
+      ${st === "posted" ? '<div class="posted-chip">✓ posted</div>' : ""}
       <div class="play"><div class="playbtn">▶</div></div>
       <div class="body">
         <div class="t" title="${esc(p.caption || p.title)}">${esc(p.title)}</div>
         ${tagline ? `<div class="tags">${esc(tagline)}${p.hashtags.length > 3 ? " +" + (p.hashtags.length - 3) : ""}</div>` : ""}
         <div class="m"><span>${fmtNum(p.likes)} likes</span><span>${fmtBytes(p.bytes)}</span></div>
       </div>`;
+    const cb = tile.querySelector(".pick input");
+    cb.onclick = (e) => e.stopPropagation();
+    cb.onchange = () => {
+      if (cb.checked) SELECT.add(p.file); else SELECT.delete(p.file);
+      renderPostCard();
+    };
     tile.onclick = () => play(p);
     grid.appendChild(tile);
   }
@@ -236,7 +269,8 @@ function renderTable(lib) {
         <div class="tl" title="${esc(cap || p.title)}">${esc(p.title)}</div>
         ${cap && cap !== p.title ? `<div class="cp">${esc(cap)}</div>` : ""}
       </td>
-      <td class="num">${(p.date || "").slice(0, 10)}</td>
+      <td class="num">${(POSTED[p.file] || {}).status === "posted"
+        ? '<span class="posted-chip inline">✓ posted</span>' : (p.date || "").slice(0, 10)}</td>
       <td class="num">${fmtNum(p.likes)}</td>
       <td class="tags">${tags ? esc(tags) : '<span style="color:#B8B0A0">—</span>'}</td>
     </tr>`;
@@ -311,10 +345,9 @@ async function addAccount() {
   const btn = $("#addBtn");
   btn.disabled = true; btn.textContent = "…";
   try {
-    const r = await api("/api/accounts", { method: "POST", body: JSON.stringify({ source }) });
+    const r = await api("/api/accounts", { method: "POST", body: JSON.stringify({ username: source }) });
     input.value = "";
-    const kind = r.account.kind;
-    toast(`Added ${r.account.username}${kind !== "instagram" ? " (" + kind + ")" : ""}`);
+    toast(`Added @${r.account.username}`);
     CURRENT = r.account.id;
     await load();
   } catch (e) {
@@ -385,20 +418,46 @@ $$("#viewSeg button").forEach((b) => {
   };
 });
 
+// ---------------------------------------------------------------- posting
+async function startPost(publish) {
+  const a = account();
+  if (!a) return;
+  const files = SELECT.size ? [...SELECT] : null;
+  const count = files ? files.length : unpostedCount();
+  if (!count) return toast("Nothing left to post", true);
+  if (publish && !confirm(`Publish ${count} reel(s) to @${a.username}?\n\nThis uploads publicly. Use Dry run first if you are unsure.`)) return;
+  try {
+    const r = await api(`/api/accounts/${a.id}/post`, {
+      method: "POST", body: JSON.stringify({ files, publish }),
+    });
+    subscribe(r.job.id);
+    setRunning(r.job);
+    toast(publish ? `Publishing ${r.queued} reel(s)…` : `Dry run on ${r.queued} reel(s)…`);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+$("#dryBtn").onclick = () => startPost(false);
+$("#publishBtn").onclick = () => startPost(true);
+
 // ---------------------------------------------------------------- progress
 function setRunning(job) {
   const running = !!(job && (job.status === "running" || job.status === undefined));
+  const isPost = job && job.quality === "post";
   $("#scrapeBtn").style.display = running ? "none" : "";
   $("#cancelBtn").style.display = running ? "" : "none";
+  $("#dryBtn").disabled = running;
+  $("#publishBtn").disabled = running;
   $("#progress").classList.toggle("on", !!job);
   if (!job) return;
 
   $("#pCount").textContent = fmtNum(job.downloaded || 0);
   $("#pTotal").textContent = job.expected ? `of ${fmtNum(job.expected)}` : "";
   $("#pStatus").textContent = job.status;
+  const verb = isPost ? "Posting" : "Downloading";
   $("#pTitle").textContent = job.status === "running"
-    ? `Downloading @${job.account}…`
-    : `${job.status === "cancelled" ? "Stopped" : job.status === "done" ? "Finished" : "Ended"} — ${fmtNum(job.downloaded || 0)} new`;
+    ? `${verb} @${job.account}…`
+    : `${job.status === "cancelled" ? "Stopped" : job.status === "done" ? "Finished" : "Ended"} — ${fmtNum(job.downloaded || 0)} ${isPost ? "posted" : "new"}`;
   const pbar = $("#pbar");
   const hasTotal = !!job.expected;
   pbar.classList.toggle("indet", !hasTotal && job.status === "running");

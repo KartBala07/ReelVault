@@ -24,6 +24,31 @@ Everything runs on your machine. No cloud, no accounts on our side, no telemetry
 - **Live progress + log** — server-sent events stream gallery-dl's output into
   the UI; stop a job at any time.
 - **Exports** — `index.csv` per account with every field, plus a thumbnail grid.
+- **Post back to Instagram** — select reels (or leave nothing selected for "all
+  unposted") and publish them through Instagram's own upload dialog, driven in
+  Firefox with your existing login. **Dry run** walks the whole flow and stops
+  just before Share. Posting state is tracked per file, so nothing is posted
+  twice.
+
+## Post to Instagram
+
+Merged from [InstaReelPoster](https://github.com/KartBala07/InstaReelPoster).
+
+Posting drives the real Instagram web UI with Selenium inside a clone of your
+Firefox profile — no password is stored, and the account is whatever that
+session is logged into (the UI shows it before posting).
+
+```bash
+python3 -m pip install --user selenium      # Selenium Manager fetches geckodriver
+```
+
+1. Log in to Instagram in Firefox (the same session used for scraping).
+2. ReelVault clones the profile to `~/.reelvault/firefox-profile` on first use.
+3. Pick reels with the checkbox on each tile, or leave nothing selected to queue
+   every file that has not been posted yet.
+4. **Dry run** first, then **Publish** — it asks for confirmation before uploading.
+
+Captions come from the post's own caption, falling back to the filename.
 
 ## Install
 

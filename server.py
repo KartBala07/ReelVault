@@ -24,8 +24,7 @@ import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from reelvault import ig, library, session, sources
-from reelvault.ytdlp import ytdlp_version
+from reelvault import ig, library, session
 from reelvault.jobs import JobManager
 from reelvault.store import Store
 
@@ -262,6 +261,9 @@ class Handler(BaseHTTPRequestHandler):
         m = re.match(r"^/api/accounts/(\d+)/posts$", p)
         if m:
             return self.api_posts(int(m.group(1)), q)
+        m = re.match(r"^/api/accounts/(\d+)/posted$", p)
+        if m:
+            return self.api_posted(int(m.group(1)))
         m = re.match(r"^/api/accounts/(\d+)/index\.csv$", p)
         if m:
             return self.api_csv(int(m.group(1)))
@@ -285,6 +287,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.api_session_import()
         if p == "/api/reveal":
             return self.api_reveal()
+        m = re.match(r"^/api/accounts/(\d+)/post$", p)
+        if m:
+            return self.api_post(int(m.group(1)))
         m = re.match(r"^/api/accounts/(\d+)/scrape$", p)
         if m:
             return self.api_scrape(int(m.group(1)))
@@ -327,7 +332,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.json({
             "accounts": accounts,
             "deps": {"gallery_dl": {"ok": gd_ok, "version": gd_ver},
-                     "yt_dlp": {"ok": bool(yt_ok), "version": ytdlp_version()},
+                     "yt_dlp": {"ok": yt_ok, "version": yt_ver},
                      "ffmpeg": bool(ffmpeg_bin())},
             "session": {"present": os.path.exists(JAR), "logged_in": ig.logged_in(JAR)},
         })
@@ -345,23 +350,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_add_account(self):
         body = self.body()
-        raw = body.get("source") or body.get("username") or ""
-        try:
-            kind, target, label = sources.detect(raw)
-        except Exception as e:
-            return self.json({"ok": False, "error": str(e)}, 400)
-
-        if kind == "instagram" and not ig.logged_in(JAR):
+        username = (body.get("source") or body.get("username") or "").strip()
+        username = username.lstrip("@/").rstrip("/").split("/")[-1]
+        if not USER_RE.match(username):
+            return self.json({"ok": False, "error": "invalid username"}, 400)
+        if not ig.logged_in(JAR):
             return self.json({"ok": False, "error": "not_connected"}, 409)
-
-        total = 0
-        if kind == "instagram":
-            total = ig.profile_total(JAR, target)   # 0 = unknown, not fatal
-        acc = STORE.add_account(label, total, kind, target)
-        os.makedirs(lib_dir(label), exist_ok=True)
-        os.makedirs(os.path.dirname(archive_path(label)), exist_ok=True)
-        return self.json({"ok": True, "account": {"id": acc["id"], "username": label,
-                                                  "kind": kind, "target": target,
+        total = ig.profile_total(JAR, username)   # 0 = unknown, not fatal
+        acc = STORE.add_account(username, total)
+        os.makedirs(lib_dir(username), exist_ok=True)
+        os.makedirs(os.path.dirname(archive_path(username)), exist_ok=True)
+        return self.json({"ok": True, "account": {"id": acc["id"], "username": username,
                                                   "total_posts": total}})
 
     def api_delete(self, aid):
@@ -395,20 +394,17 @@ class Handler(BaseHTTPRequestHandler):
         limit_n = int(body.get("limit") or 0)
         quality = body.get("quality") or acc["quality"] or "720p"
         STORE.set_quality(aid, quality)
-        kind = acc.get("kind") or "instagram"
-        if kind == "instagram" and not ig.logged_in(JAR):
+        if not ig.logged_in(JAR):
             return self.json({"ok": False, "error": "not_connected"}, 409)
-        total = acc["total_posts"] if kind == "instagram" else 0
-        if kind == "instagram" and not total:
-            total = ig.profile_total(JAR, acc.get("target") or acc["username"])
+        total = acc["total_posts"] or ig.profile_total(JAR, acc["username"])
         expected = min(limit_n, total) if (limit_n and total) else (limit_n or total)
         jid = STORE.new_job(aid, expected, limit_n, quality)
         env = subprocess_env()
         ff = ffmpeg_bin()
         if ff:
             env["REELVAULT_FFMPEG"] = ff
-        cmd = sources.build_command(acc, JAR, lib_dir(acc["username"]),
-                                    archive_path(acc["username"]), quality, limit_n)
+        cmd = ig.gallery_dl_cmd(JAR, acc["username"], lib_dir(acc["username"]),
+                                archive_path(acc["username"]), quality, limit_n)
         job = JOBS.create(jid=jid, account=acc["username"], dest=lib_dir(acc["username"]),
                           cmd=cmd, expected=expected, limit_n=limit_n, quality=quality,
                           subprocess_env=env)
@@ -438,6 +434,77 @@ class Handler(BaseHTTPRequestHandler):
         job.cancel()
         STORE.update_job(jid, status="cancelled", finished_at=time.time())
         return self.json({"ok": True})
+
+    def api_posted(self, aid):
+        acc = STORE.account_by_id(aid)
+        if not acc:
+            return self.json({"ok": False, "error": "no such account"}, 404)
+        return self.json({"ok": True, "posted": STORE.posted_for(aid)})
+
+    def api_post(self, aid):
+        acc = STORE.account_by_id(aid)
+        if not acc:
+            return self.json({"ok": False, "error": "no such account"}, 404)
+        if STORE.active_job(aid):
+            return self.json({"ok": False, "error": "a job is already running for this account"}, 409)
+
+        body = self.body()
+        d = lib_dir(acc["username"])
+        have = {i["file"] for i in library.library(d)}
+        files = body.get("files")
+        if files:
+            files = [f for f in files if isinstance(f, str) and f in have]
+        else:
+            posted = STORE.posted_for(aid)
+            files = [f for f in sorted(have)
+                     if posted.get(f, {}).get("status") != "posted"]
+
+        if not files:
+            return self.json({"ok": False, "error": "nothing to post"}, 400)
+
+        publish = bool(body.get("publish"))
+        template = (body.get("template") or "").strip()
+        result_path = os.path.join(ROOT, "post-result-%d.json" % int(time.time()))
+        cmd = [sys.executable, "-m", "reelvault.post_cli",
+               "--account", acc["username"], "--dir", d,
+               "--files", json.dumps(files), "--result", result_path]
+        if publish:
+            cmd.append("--publish")
+        if template:
+            cmd += ["--template", template]
+
+        jid = STORE.new_job(aid, len(files), len(files), "post")
+        job = JOBS.create(jid=jid, account=acc["username"], dest=d, cmd=cmd,
+                          expected=len(files), limit_n=len(files), quality="post",
+                          subprocess_env=subprocess_env(), mode="post", cwd=APP_ROOT)
+        job.start()
+
+        def finalize():
+            job._thread.join()
+            try:
+                STORE.update_job(jid, status=job.status, finished_at=job.finished or time.time(),
+                                 downloaded=job.downloaded)
+            except Exception:
+                pass
+            try:
+                with open(result_path) as f:
+                    results = json.load(f)
+            except Exception:
+                results = []
+            for r in results:
+                try:
+                    STORE.record_post(aid, r.get("file", ""), r.get("status", "failed"),
+                                      r.get("caption", ""), r.get("account", ""),
+                                      r.get("error", ""))
+                except Exception:
+                    pass
+            try:
+                os.remove(result_path)
+            except OSError:
+                pass
+        threading.Thread(target=finalize, daemon=True).start()
+        return self.json({"ok": True, "job": job.as_dict(), "publish": publish,
+                          "queued": len(files)})
 
     def api_posts(self, aid, q):
         acc = STORE.account_by_id(aid)

@@ -11,8 +11,10 @@ from . import ig
 
 class Job(object):
     def __init__(self, jid, account, dest, cmd, expected=0, limit_n=0, quality="720p",
-                 subprocess_env=None):
+                 subprocess_env=None, mode="download", cwd=None):
         self.id = jid
+        self.mode = mode
+        self.cwd = cwd
         self.account = account
         self.dest = dest
         self.cmd = cmd
@@ -76,7 +78,7 @@ class Job(object):
         try:
             self.proc = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, bufsize=1, env=self.env)
+                text=True, bufsize=1, env=self.env, cwd=self.cwd)
         except Exception as e:
             self.emit("failed to start gallery-dl: %s" % e, "error")
             self.status = "failed"
@@ -88,6 +90,9 @@ class Job(object):
                 line = line.rstrip("\n")
                 if not line:
                     continue
+                if self.mode == "post" and line.startswith(("POSTED ", "DRYRUN ", "FAILED ")):
+                    if not line.startswith("FAILED"):
+                        self.downloaded += 1
                 if line.startswith(("WARNING", "ERROR", "[download][error]")):
                     self.emit(line, "warn")
                 else:
@@ -96,20 +101,22 @@ class Job(object):
         t = threading.Thread(target=pump, daemon=True)
         t.start()
         while self.proc.poll() is None:
-            self.downloaded = max(0, self._count_files() - before)
+            if self.mode != "post":
+                self.downloaded = max(0, self._count_files() - before)
             time.sleep(1.5)
         self.proc.wait()
         t.join(timeout=5)
-        self.downloaded = max(0, self._count_files() - before)
+        if self.mode != "post":
+            self.downloaded = max(0, self._count_files() - before)
         rc = self.proc.returncode
         if self.status == "cancelled":
             pass
         elif rc == 0:
             self.status = "done"
-            self.emit("finished: %d new file(s)" % self.downloaded, "done")
+            self.emit("finished: %d item(s)" % self.downloaded, "done")
         else:
             self.status = "partial" if self.downloaded else "failed"
-            self.emit("gallery-dl exited with code %d" % rc, "error")
+            self.emit("job exited with code %d" % rc, "error")
         self.finished = time.time()
 
     def cancel(self):

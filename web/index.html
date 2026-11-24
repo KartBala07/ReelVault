@@ -95,6 +95,24 @@
     </div>
   </section>
 
+  <section class="card dl" id="postCard">
+    <div class="ico" style="background:var(--pink)">↗</div>
+    <div>
+      <h2>Post to Instagram</h2>
+      <p>Uploads through Instagram's own share dialog using your Firefox login — no password
+         is stored. <b>Dry run</b> walks the whole flow and stops just before Share.</p>
+      <div class="badges">
+        <span class="badge y" id="badgeUnposted">0 unposted</span>
+        <span class="badge" id="badgeSelected">none selected</span>
+        <span class="badge p">from @<span id="postAccount">—</span></span>
+      </div>
+    </div>
+    <div class="dl-controls">
+      <button class="btn" id="dryBtn">Dry run</button>
+      <button class="btn-primary" id="publishBtn">Publish →</button>
+    </div>
+  </section>
+
   <section class="card progress" id="progress">
     <div class="top">
       <h3 id="pTitle">Downloading…</h3>

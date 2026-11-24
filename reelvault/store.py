@@ -38,6 +38,17 @@ class Store(object):
             quality TEXT DEFAULT '720p',
             message TEXT DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS posted (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL,
+            file TEXT NOT NULL,
+            status TEXT NOT NULL,
+            caption TEXT DEFAULT '',
+            posted_as TEXT DEFAULT '',
+            posted_at REAL NOT NULL,
+            error TEXT DEFAULT '',
+            UNIQUE(account_id, file)
+        );
         """)
         # migrate older databases that predate multi-source support
         cols = {r[1] for r in self.db.execute("PRAGMA table_info(accounts)").fetchall()}
@@ -113,4 +124,29 @@ class Store(object):
         keys = ",".join("%s=?" % k for k in kw)
         self.db.execute("UPDATE jobs SET %s WHERE id=?" % keys,
                         tuple(kw.values()) + (jid,))
+        self.db.commit()
+
+    # ---- posted reels ----
+    def record_post(self, account_id, file, status, caption="", posted_as="", error=""):
+        self.db.execute(
+            "INSERT INTO posted (account_id, file, status, caption, posted_as, posted_at, error) "
+            "VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT(account_id, file) DO UPDATE SET status=excluded.status, "
+            "caption=excluded.caption, posted_as=excluded.posted_as, posted_at=excluded.posted_at, "
+            "error=excluded.error",
+            (account_id, file, status, caption[:500], posted_as, time.time(), error[:300]))
+        self.db.commit()
+
+    def posted_for(self, account_id):
+        rows = self.db.execute(
+            "SELECT file, status, posted_as, posted_at, error FROM posted WHERE account_id=?",
+            (account_id,)).fetchall()
+        return {r["file"]: dict(r) for r in rows}
+
+    def clear_posted(self, account_id, file=None):
+        if file:
+            self.db.execute("DELETE FROM posted WHERE account_id=? AND file=?",
+                            (account_id, file))
+        else:
+            self.db.execute("DELETE FROM posted WHERE account_id=?", (account_id,))
         self.db.commit()
