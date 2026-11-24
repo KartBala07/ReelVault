@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ReelVault — Instagram reel archiver</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <div class="logo">R</div>
+      <div>
+        <h1>ReelVault</h1>
+        <span>local reel archiver</span>
+      </div>
+    </div>
+
+    <div class="side-title">Accounts</div>
+    <div class="accounts" id="accounts"></div>
+
+    <div class="addbox">
+      <div class="addrow">
+        <input id="newAccount" placeholder="@username" autocomplete="off" spellcheck="false">
+        <button id="addBtn" title="Add account">Add</button>
+      </div>
+      <div class="hint" id="connHint">Checking Instagram session…</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <h2 id="accTitle">Library</h2>
+      <span class="chip" id="accChip" style="display:none"></span>
+      <div class="spacer"></div>
+      <button class="btn ghost" id="revealBtn" style="display:none">Open folder</button>
+      <button class="btn ghost" id="csvBtn" style="display:none">Export CSV</button>
+      <button class="btn ghost danger" id="removeBtn" style="display:none">Remove</button>
+    </div>
+
+    <div class="controls" id="controls" style="display:none">
+      <div class="field">
+        <label for="limit">How many reels</label>
+        <input id="limit" type="number" min="0" step="1" placeholder="0 = all" value="0">
+      </div>
+      <div class="field">
+        <label for="quality">Quality</label>
+        <select id="quality">
+          <option value="720p">720p · H.264 (fast)</option>
+          <option value="1080p">1080p · VP9 (best)</option>
+        </select>
+      </div>
+      <button class="btn primary" id="scrapeBtn">Download new</button>
+      <button class="btn" id="cancelBtn" style="display:none">Stop</button>
+      <button class="btn ghost" id="logToggle">Show log</button>
+    </div>
+
+    <div class="progress" id="progress">
+      <div class="bar"><i id="barFill"></i></div>
+      <div class="pmeta">
+        <b id="pCount">0</b> downloaded
+        <span id="pTotal"></span>
+        <span class="spacer" style="flex:1"></span>
+        <span id="pStatus"></span>
+      </div>
+    </div>
+
+    <div class="log" id="log"></div>
+
+    <div class="lib" id="lib"></div>
+  </main>
+</div>
+
+<div class="modal" id="modal">
+  <div class="box">
+    <video id="player" controls playsinline></video>
+    <div class="mrow">
+      <div style="min-width:0;flex:1">
+        <div class="t" id="mTitle"></div>
+        <div class="m" id="mMeta"></div>
+        <div class="m tags" id="mTags" style="color:var(--accent-2);margin-top:4px"></div>
+      </div>
+      <a class="btn ghost" id="mLink" target="_blank" rel="noopener" style="display:none">Open on IG</a>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
