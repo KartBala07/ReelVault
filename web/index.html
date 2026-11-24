@@ -7,69 +7,114 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<div class="app">
-  <aside class="side">
-    <div class="brand">
-      <div class="logo">R</div>
-      <div>
-        <h1>ReelVault</h1>
-        <span>local reel archiver</span>
+
+<header class="nav">
+  <div class="brand"><span class="logo">R</span><span>ReelVault</span></div>
+  <nav>
+    <a href="#" class="on">Library</a>
+    <a href="#accounts">Accounts</a>
+    <a href="https://github.com/KartBala07/ReelVault" target="_blank" rel="noopener">Source</a>
+  </nav>
+  <div class="nav-right">
+    <button class="pill" id="sessionPill"><span class="dot off" id="sessionDot"></span><span id="sessionText">Checking…</span></button>
+    <button class="pill" id="revealBtn">Open folder</button>
+    <button class="pill" id="csvBtn">Export CSV</button>
+    <button class="pill" id="removeBtn" title="Remove this account from ReelVault">Remove</button>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <section class="hero">
+    <div>
+      <h1>Every reel, saved.<br>Nothing lost to the feed.</h1>
+      <p>Point ReelVault at any public Instagram account and it mirrors the whole
+         catalogue to your disk — video, caption, hashtags, likes and date — with
+         a library you can actually browse.</p>
+    </div>
+    <div class="statbox">
+      <div class="col">
+        <div class="lbl">Saved</div>
+        <div class="big" id="heroSaved">0</div>
+        <div class="sub">reels on disk</div>
+      </div>
+      <div class="col">
+        <div class="lbl">Likes</div>
+        <div class="big coral" id="heroLikes">0</div>
+        <div class="sub">across library</div>
       </div>
     </div>
+  </section>
 
-    <div class="side-title">Accounts</div>
-    <div class="accounts" id="accounts"></div>
-
-    <div class="addbox">
-      <div class="addrow">
-        <input id="newAccount" placeholder="@username" autocomplete="off" spellcheck="false">
-        <button id="addBtn" title="Add account">Add</button>
-      </div>
-      <div class="hint" id="connHint">Checking Instagram session…</div>
-    </div>
-  </aside>
-
-  <main class="main">
-    <div class="topbar">
-      <h2 id="accTitle">Library</h2>
-      <span class="chip" id="accChip" style="display:none"></span>
+  <section id="accountsAnchor">
+    <div class="strip-head">
+      <span class="lbl">Accounts</span>
+      <span class="chip plain" id="accCount">0</span>
       <div class="spacer"></div>
-      <button class="btn ghost" id="revealBtn" style="display:none">Open folder</button>
-      <button class="btn ghost" id="csvBtn" style="display:none">Export CSV</button>
-      <button class="btn ghost danger" id="removeBtn" style="display:none">Remove</button>
+      <div class="conn" id="connHint">Checking Instagram session…</div>
     </div>
+    <div class="acc-cards" id="accounts"></div>
+  </section>
 
-    <div class="controls" id="controls" style="display:none">
+  <section class="stats" id="stats"></section>
+
+  <section class="card dl" id="downloadCard">
+    <div class="ico">⬇</div>
+    <div>
+      <h2 id="dlTitle">Download new reels</h2>
+      <p id="dlDesc">Already-saved posts are skipped automatically, so you can run this any time.</p>
+      <div class="badges">
+        <span class="badge y" id="badgeSaved">0 saved</span>
+        <span class="badge" id="badgeQuality">720p</span>
+        <span class="badge p">resumable</span>
+      </div>
+    </div>
+    <div class="dl-controls">
       <div class="field">
-        <label for="limit">How many reels</label>
-        <input id="limit" type="number" min="0" step="1" placeholder="0 = all" value="0">
+        <label for="limit">How many</label>
+        <input id="limit" type="number" min="0" step="1" placeholder="all" value="">
       </div>
       <div class="field">
         <label for="quality">Quality</label>
         <select id="quality">
-          <option value="720p">720p · H.264 (fast)</option>
-          <option value="1080p">1080p · VP9 (best)</option>
+          <option value="720p">720p</option>
+          <option value="1080p">1080p</option>
         </select>
       </div>
-      <button class="btn primary" id="scrapeBtn">Download new</button>
+      <button class="btn-primary" id="scrapeBtn">Start download →</button>
       <button class="btn" id="cancelBtn" style="display:none">Stop</button>
-      <button class="btn ghost" id="logToggle">Show log</button>
     </div>
+  </section>
 
-    <div class="progress" id="progress">
-      <div class="bar"><i id="barFill"></i></div>
-      <div class="pmeta">
-        <b id="pCount">0</b> downloaded
-        <span id="pTotal"></span>
-        <span class="spacer" style="flex:1"></span>
-        <span id="pStatus"></span>
+  <section class="card progress" id="progress">
+    <div class="top">
+      <h3 id="pTitle">Downloading…</h3>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost" id="logToggle">Show log</button>
+    </div>
+    <div class="bar" id="pbar"><i id="barFill"></i></div>
+    <div class="pmeta">
+      <span><b id="pCount">0</b> downloaded</span>
+      <span id="pTotal"></span>
+      <div class="spacer"></div>
+      <span id="pStatus"></span>
+    </div>
+    <div class="log" id="log"></div>
+  </section>
+
+  <section>
+    <div class="libhead">
+      <h2 id="accTitle">Library</h2>
+      <span class="chip" id="accChip" style="display:none">0 saved</span>
+      <div class="spacer"></div>
+      <div class="seg" id="viewSeg">
+        <button data-view="grid">Grid</button>
+        <button data-view="table">Table</button>
       </div>
     </div>
+    <div id="lib"></div>
+  </section>
 
-    <div class="log" id="log"></div>
-
-    <div class="lib" id="lib"></div>
-  </main>
 </div>
 
 <div class="modal" id="modal">
@@ -79,9 +124,9 @@
       <div style="min-width:0;flex:1">
         <div class="t" id="mTitle"></div>
         <div class="m" id="mMeta"></div>
-        <div class="m tags" id="mTags" style="color:var(--accent-2);margin-top:4px"></div>
+        <div class="tags" id="mTags"></div>
       </div>
-      <a class="btn ghost" id="mLink" target="_blank" rel="noopener" style="display:none">Open on IG</a>
+      <a class="btn" id="mLink" target="_blank" rel="noopener" style="display:none">Open on IG ↗</a>
     </div>
   </div>
 </div>

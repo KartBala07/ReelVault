@@ -139,6 +139,15 @@ def hashtags_of(meta):
     return out
 
 
+def shortcode_of(mp4_path):
+    """Best-effort shortcode for a library file (metadata first, filename as fallback)."""
+    meta = _meta_for(mp4_path)
+    if meta.get("shortcode"):
+        return meta["shortcode"]
+    m = re.search(r"_([A-Za-z0-9_-]{8,})\.mp4$", os.path.basename(mp4_path))
+    return m.group(1) if m else os.path.basename(mp4_path)[:-4]
+
+
 def library(lib_dir):
     """Scan the library: metadata-rich records for the grid, table and CSV."""
     items = []

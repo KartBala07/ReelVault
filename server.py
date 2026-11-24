@@ -21,6 +21,7 @@ import threading
 import time
 import urllib.parse
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from reelvault import ig, library, session
@@ -86,23 +87,80 @@ def ensure_thumb(username, shortcode, media_file):
     if not ff:
         return None
     os.makedirs(os.path.dirname(tp), exist_ok=True)
+    tmp = tp + ".%d.tmp.jpg" % threading.get_ident()
     try:
         subprocess.run([ff, "-y", "-loglevel", "error", "-ss", "0.5", "-i", media_file,
-                        "-frames:v", "1", "-vf", "scale=360:-2", tp],
+                        "-frames:v", "1", "-vf", "scale=270:-2", "-q:v", "6", tmp],
                        capture_output=True, timeout=40)
+        if os.path.exists(tmp) and os.path.getsize(tmp) > 0:
+            os.replace(tmp, tp)
+            return tp
     except Exception:
-        return None
-    return tp if os.path.exists(tp) else None
+        pass
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+    return None
+
+
+# Bounded pool: a library of 1,000 reels must not spawn 1,000 ffmpegs at once.
+THUMBS = ThreadPoolExecutor(max_workers=4)
+_THUMB_LOCK = threading.Lock()
+_THUMB_PENDING = set()
+
+
+def queue_thumb(username, shortcode, media_file):
+    key = (username, shortcode)
+    with _THUMB_LOCK:
+        if key in _THUMB_PENDING:
+            return False
+        _THUMB_PENDING.add(key)
+
+    def work():
+        try:
+            ensure_thumb(username, shortcode, media_file)
+        finally:
+            with _THUMB_LOCK:
+                _THUMB_PENDING.discard(key)
+
+    THUMBS.submit(work)
+    return True
+
+
+def backfill_thumbs(username):
+    """Generate every missing thumbnail for an account, 4 at a time."""
+    d = lib_dir(username)
+    if not os.path.isdir(d):
+        return 0
+    queued = 0
+    for path in sorted(glob_mp4(d)):
+        sc = library.shortcode_of(path)
+        if not os.path.exists(thumb_path(username, sc)):
+            if queue_thumb(username, sc, path):
+                queued += 1
+    return queued
+
+
+def glob_mp4(d):
+    try:
+        return [os.path.join(d, f) for f in os.listdir(d) if f.endswith(".mp4")]
+    except OSError:
+        return []
 
 
 def postprocess(username):
-    """Flatten gallery-dl's nested dirs, then give every file a real title."""
+    """Flatten gallery-dl's nested dirs, title every file, warm the thumbnails."""
     d = lib_dir(username)
     try:
         library.flatten(d)
-        return library.title_all(d)
+        renamed = library.title_all(d)
     except Exception:
-        return 0
+        renamed = 0
+    threading.Thread(target=backfill_thumbs, args=(username,), daemon=True).start()
+    return renamed
 
 
 # --------------------------------------------------------------------------- handler
@@ -117,6 +175,8 @@ class Handler(BaseHTTPRequestHandler):
     def _send(self, code, body=b"", ctype="application/json", extra=None):
         if isinstance(body, str):
             body = body.encode()
+        if body is None:
+            body = b""
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
@@ -229,6 +289,9 @@ class Handler(BaseHTTPRequestHandler):
         m = re.match(r"^/api/accounts/(\d+)/retitle$", p)
         if m:
             return self.api_retitle(int(m.group(1)))
+        m = re.match(r"^/api/accounts/(\d+)/thumbs$", p)
+        if m:
+            return self.api_thumbs(int(m.group(1)))
         m = re.match(r"^/api/jobs/(\d+)/cancel$", p)
         if m:
             return self.api_cancel(int(m.group(1)))
@@ -398,6 +461,12 @@ class Handler(BaseHTTPRequestHandler):
         n = postprocess(acc["username"])
         return self.json({"ok": True, "renamed": n})
 
+    def api_thumbs(self, aid):
+        acc = STORE.account_by_id(aid)
+        if not acc:
+            return self.json({"ok": False, "error": "no such account"}, 404)
+        return self.json({"ok": True, "queued": backfill_thumbs(acc["username"])})
+
     def api_reveal(self):
         body = self.body()
         aid = int(body.get("account_id") or 0)
@@ -429,12 +498,14 @@ class Handler(BaseHTTPRequestHandler):
         tp = thumb_path(username, shortcode)
         if not os.path.exists(tp):
             base = lib_dir(username)
-            cands = [f for f in os.listdir(base) if f.endswith(".mp4") and shortcode in f]
-            if not cands:
-                return self._send(404, "no thumb", "text/plain")
-            ensure_thumb(username, shortcode, os.path.join(base, cands[0]))
-        if not os.path.exists(tp):
-            return self._send(404, "no thumb", "text/plain")
+            try:
+                cands = [f for f in os.listdir(base) if f.endswith(".mp4") and shortcode in f]
+            except OSError:
+                cands = []
+            if cands:
+                # generate in the background pool; the page re-renders and picks it up
+                queue_thumb(username, shortcode, os.path.join(base, cands[0]))
+            return self._send(404, "generating", "text/plain")
         return self.file(tp, "image/jpeg")
 
     # ---- sse ----
@@ -489,6 +560,16 @@ def main():
     srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     srv.daemon_threads = True
     url = "http://127.0.0.1:%d" % args.port
+
+    # Warm thumbnails for existing libraries without blocking startup.
+    def warm():
+        for a in STORE.accounts():
+            try:
+                backfill_thumbs(a["username"])
+            except Exception:
+                pass
+    threading.Thread(target=warm, daemon=True).start()
+
     print("ReelVault running at %s  (data: %s)" % (url, ROOT))
     if args.open:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
