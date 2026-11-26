@@ -86,12 +86,22 @@ def session_state(jar_path, ttl=120):
     try:
         with urllib.request.urlopen(req, timeout=20) as r:
             body = r.read(200000).decode("utf-8", "replace")
-            if "update_risky_contactpoint" in body or "Your email may not be secure" in body:
+            final = r.url or ""
+            if "update_risky_contactpoint" in body or "update_risky_contactpoint" in final:
                 state["blocked"] = True
                 state["reason"] = "Instagram wants the account email updated"
-            elif "accounts/login" in (r.url or ""):
+            elif "Your email may not be secure" in body:
+                state["blocked"] = True
+                state["reason"] = "Instagram wants the account email updated"
+            elif "accounts/login" in final:
                 state["logged_in"] = False
                 state["reason"] = "Instagram served the login page"
+            elif not ('"viewer"' in body or 'is_logged_in": true' in body
+                      or "PolarisProfilePageContentQuery" in body):
+                # A 200 is not proof of a usable session: the checkpoint and the
+                # logged-out shell both return 200.
+                state["blocked"] = True
+                state["reason"] = "Instagram served a checkpoint instead of the app"
     except urllib.error.HTTPError as e:
         if e.code in (301, 302, 303, 307, 308):
             state["blocked"] = True
