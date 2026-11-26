@@ -120,6 +120,10 @@ class Store(object):
             (account_id,)).fetchone()
         return dict(r) if r else None
 
+    def running_jobs(self):
+        return [dict(r) for r in self.db.execute(
+            "SELECT * FROM jobs WHERE status='running'").fetchall()]
+
     def update_job(self, jid, **kw):
         keys = ",".join("%s=?" % k for k in kw)
         self.db.execute("UPDATE jobs SET %s WHERE id=?" % keys,

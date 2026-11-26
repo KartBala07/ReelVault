@@ -108,9 +108,28 @@
       </div>
     </div>
     <div class="dl-controls">
+      <button class="btn" id="previewBtn">Preview captions</button>
       <button class="btn" id="dryBtn">Dry run</button>
       <button class="btn-primary" id="publishBtn">Publish →</button>
     </div>
+    <div class="cap-editor">
+      <div class="field grow">
+        <label for="capTemplate">Caption template</label>
+        <textarea id="capTemplate" rows="2" spellcheck="false"
+          placeholder="{caption}&#10;&#10;{credit} {hashtags}"></textarea>
+      </div>
+      <div class="field">
+        <label for="capTags">Hashtags</label>
+        <input id="capTags" type="text" spellcheck="false" placeholder="#reels #reelsinstagram">
+      </div>
+    </div>
+    <div class="cap-lines">
+      <code>{caption}</code> <code>{credit}</code> <code>{hashtags}</code>
+      <code>{likes}</code> <code>{shortcode}</code> <code>{url}</code>
+      <span class="spacer"></span>
+      <span class="cap-hint" id="capHint">credits the account each reel was scraped from</span>
+    </div>
+    <div class="cap-preview" id="capPreview" hidden></div>
   </section>
 
   <section class="card progress" id="progress">

@@ -29,6 +29,13 @@ Everything runs on your machine. No cloud, no accounts on our side, no telemetry
   Firefox with your existing login. **Dry run** walks the whole flow and stops
   just before Share. Posting state is tracked per file, so nothing is posted
   twice.
+- **Captions that are not filename soup** — a template with `{caption}`,
+  `{credit}`, `{hashtags}`, `{likes}`, `{shortcode}` and `{url}`, plus a hashtag
+  list that de-duplicates against the original caption. **Preview captions**
+  shows exactly what will be published without opening a browser.
+- **Session health, not just a cookie** — ReelVault checks whether Instagram
+  actually serves the session or redirect-loops it behind a security
+  checkpoint, and says so instead of failing with "create button not found".
 
 ## Post to Instagram
 
@@ -46,9 +53,50 @@ python3 -m pip install --user selenium      # Selenium Manager fetches geckodriv
 2. ReelVault clones the profile to `~/.reelvault/firefox-profile` on first use.
 3. Pick reels with the checkbox on each tile, or leave nothing selected to queue
    every file that has not been posted yet.
-4. **Dry run** first, then **Publish** — it asks for confirmation before uploading.
+4. Write the caption template and hashtags once — they are remembered in the
+   browser — then hit **Preview captions** to read what will actually be
+   posted.
+5. **Dry run** first, then **Publish** — it asks for confirmation before uploading.
+   Every stage is screenshotted into `~/.reelvault/shots/<run>/`.
 
-Captions come from the post's own caption, falling back to the filename.
+Captions come from the post's own caption, falling back to a template. Scraped
+reels often have an **empty** description, so the default template still credits
+the original account and appends your hashtags:
+
+```
+{caption}
+
+{credit} {hashtags}      →      "#assettocorsa #fyp #dxt
+                                 via @dxt.992 #reels #reelsinstagram"
+```
+
+| placeholder | becomes |
+| --- | --- |
+| `{caption}` | the original caption, or the title when it is empty |
+| `{source}` | the account the reel was scraped from |
+| `{credit}` | `via @<source>`, empty when unknown |
+| `{hashtags}` | your tags, minus any already in the caption |
+| `{likes}` `{shortcode}` `{url}` `{date}` | the rest of the metadata |
+
+The same flow runs from a terminal, without the server:
+
+```bash
+python3 -m reelvault.post_cli --account dxt.992 --dir ~/.reelvault/data/dxt.992 \
+  --files '["2025-08-09_5-likes_DNJXwtch9JN.mp4"]' --tags '#reels #fyp'
+# add --publish to actually upload
+```
+
+### When Instagram blocks the session
+
+Instagram can gate an account behind a security checkpoint ("Your email may not
+be secure → Update email address"). While that is up, **every** request
+redirect-loops: downloads fail with `HTTP redirect to home page` and the poster
+never finds the create button. ReelVault detects this and shows `Session blocked`
+with the reason instead of a mysterious failure.
+
+Clear it once in your own browser (sign in, resolve the prompt), then click
+**Import my browser session** — that copies the cookies *and* re-clones the
+Firefox profile, so the poster uses the same fresh login as your browser.
 
 ## Install
 

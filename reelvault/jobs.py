@@ -23,6 +23,7 @@ class Job(object):
         self.env = subprocess_env
         self.proc = None
         self.status = "running"
+        self.blocked = ""
         self.started = time.time()
         self.finished = None
         self.downloaded = 0
@@ -93,7 +94,10 @@ class Job(object):
                 if self.mode == "post" and line.startswith(("POSTED ", "DRYRUN ", "FAILED ")):
                     if not line.startswith("FAILED"):
                         self.downloaded += 1
-                if line.startswith(("WARNING", "ERROR", "[download][error]")):
+                if line.startswith("BLOCKED "):
+                    self.blocked = line[len("BLOCKED "):].strip()
+                    self.emit(line, "error")
+                elif line.startswith(("WARNING", "ERROR", "[download][error]")):
                     self.emit(line, "warn")
                 else:
                     self.emit(line)
@@ -140,6 +144,7 @@ class Job(object):
             "downloaded": self.downloaded, "expected": self.expected,
             "limit": self.limit_n, "quality": self.quality,
             "started": self.started, "finished": self.finished,
+            "blocked": self.blocked,
         }
 
 

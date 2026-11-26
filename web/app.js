@@ -70,6 +70,15 @@ function renderSession() {
     const a = $("#importLink");
     if (a) a.onclick = importSession;
     $("#sessionPill").onclick = importSession;
+  } else if (s.blocked) {
+    dot.className = "dot off";
+    txt.textContent = "Session blocked";
+    hint.className = "conn bad";
+    hint.innerHTML = `<b>Instagram is blocking this session.</b> ${esc(s.reason || "security checkpoint")}
+      — open instagram.com in Firefox, clear it, then <a href="#" id="importLink">re-import</a>.`;
+    const a = $("#importLink");
+    if (a) a.onclick = importSession;
+    $("#sessionPill").onclick = importSession;
   } else if (!gd.ok) {
     dot.className = "dot";
     txt.textContent = "gallery-dl missing";
@@ -173,9 +182,11 @@ function renderMain() {
   $("#badgeQuality").textContent = a.quality || "720p";
   $("#dlTitle").textContent = `Download new reels from @${a.username}`;
   $("#quality").value = a.quality || "720p";
-  $("#scrapeBtn").disabled = !STATE.session.logged_in;
+  const off = !STATE.session.logged_in || !!STATE.session.blocked;
+  $("#scrapeBtn").disabled = off;
   $("#postCard").style.display = "";
   $("#postAccount").textContent = a.username;
+  initCaption();
   $$("#viewSeg button").forEach((b) => b.classList.toggle("on", b.dataset.view === VIEW));
   if (a.job) setRunning(a.job); else setRunning(null);
   loadPosts(a.id);
@@ -205,6 +216,9 @@ function renderPostCard() {
   $("#badgeUnposted").textContent = `${fmtNum(unpostedCount())} unposted`;
   $("#badgeSelected").textContent = SELECT.size ? `${SELECT.size} selected` : "none selected";
   $("#publishBtn").textContent = SELECT.size ? `Publish ${SELECT.size} →` : "Publish →";
+  const off = !STATE.session.logged_in || !!STATE.session.blocked;
+  $("#publishBtn").disabled = off;
+  $("#dryBtn").disabled = off;
   $("#dryBtn").textContent = SELECT.size ? `Dry run ${SELECT.size}` : "Dry run";
 }
 
@@ -332,7 +346,9 @@ async function importSession() {
   toast("Looking for a logged-in Instagram session…");
   try {
     const r = await api("/api/session/import", { method: "POST", body: "{}" });
-    toast(`Session imported from ${r.browser} ✓`);
+    toast(r.profile_refreshed
+      ? `Session imported from ${r.browser}, Firefox profile refreshed ✓`
+      : `Session imported from ${r.browser} ✓${r.note ? " — " + r.note : ""}`);
     await load();
   } catch (e) { toast(e.message, true); }
 }
@@ -419,16 +435,63 @@ $$("#viewSeg button").forEach((b) => {
 });
 
 // ---------------------------------------------------------------- posting
+const CAP_KEY = "reelvault.caption";
+let CAP = {};
+try { CAP = JSON.parse(localStorage.getItem(CAP_KEY) || "{}"); } catch (e) { CAP = {}; }
+
+const capFields = () => ({ template: $("#capTemplate").value, tags: $("#capTags").value });
+
+function initCaption() {
+  const def = (STATE.caption && STATE.caption.template) || "{caption}\n\n{credit} {hashtags}";
+  if ($("#capTemplate").dataset.ready) return;
+  $("#capTemplate").value = CAP.template != null ? CAP.template : def;
+  $("#capTags").value = CAP.tags != null ? CAP.tags : "#reels #reelsinstagram";
+  const save = () => {
+    CAP = capFields();
+    localStorage.setItem(CAP_KEY, JSON.stringify(CAP));
+  };
+  $("#capTemplate").addEventListener("input", save);
+  $("#capTags").addEventListener("input", save);
+  $("#capTemplate").dataset.ready = "1";
+}
+
+async function previewCaptions() {
+  const a = account();
+  if (!a) return;
+  const files = SELECT.size ? [...SELECT] : null;
+  try {
+    const r = await api(`/api/accounts/${a.id}/preview`, {
+      method: "POST",
+      body: JSON.stringify(Object.assign({ files, limit: 3 }, capFields())),
+    });
+    const box = $("#capPreview");
+    if (!r.items.length) {
+      box.hidden = true;
+      return toast("Nothing to preview", true);
+    }
+    box.hidden = false;
+    box.innerHTML = r.items.map((it) => `
+      <div class="row"><b>${esc(it.file)}</b>${esc(it.caption || "(empty caption)")}
+        <div class="cap-hint">${it.info.chars} chars · ${it.info.tags.length} tag(s)${it.info.from_caption ? "" : " · original had no caption"}</div>
+      </div>`).join("");
+    $("#capHint").textContent = `${fmtNum(r.unposted)} unposted in this library`;
+    toast(`Previewed ${r.items.length} caption(s)`);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
 async function startPost(publish) {
   const a = account();
   if (!a) return;
   const files = SELECT.size ? [...SELECT] : null;
   const count = files ? files.length : unpostedCount();
   if (!count) return toast("Nothing left to post", true);
-  if (publish && !confirm(`Publish ${count} reel(s) to @${a.username}?\n\nThis uploads publicly. Use Dry run first if you are unsure.`)) return;
+  if (publish && !confirm(`Publish ${count} reel(s)?\n\nThis uploads publicly to whatever account the Firefox session is logged into. Use Dry run first if you are unsure.`)) return;
   try {
     const r = await api(`/api/accounts/${a.id}/post`, {
-      method: "POST", body: JSON.stringify({ files, publish }),
+      method: "POST",
+      body: JSON.stringify(Object.assign({ files, publish }, capFields())),
     });
     subscribe(r.job.id);
     setRunning(r.job);
@@ -437,6 +500,7 @@ async function startPost(publish) {
     toast(e.message, true);
   }
 }
+$("#previewBtn").onclick = previewCaptions;
 $("#dryBtn").onclick = () => startPost(false);
 $("#publishBtn").onclick = () => startPost(true);
 
@@ -485,10 +549,15 @@ function subscribe(jid) {
     } else if (msg.type === "end") {
       ES.close(); ES = null;
       const j = msg.job;
-      toast(j.status === "done"
-        ? `Finished — ${j.downloaded} new reel(s) ✓`
-        : j.status === "cancelled" ? "Stopped"
-        : `Ended: ${j.status} (${j.downloaded} new)`, j.status !== "done");
+      const isPost = j.quality === "post";
+      if (j.blocked) {
+        toast(`Posting blocked: ${j.blocked}`, true);
+      } else {
+        toast(j.status === "done"
+          ? (isPost ? `Finished — ${j.downloaded} posted ✓` : `Finished — ${j.downloaded} new reel(s) ✓`)
+          : j.status === "cancelled" ? "Stopped"
+          : `Ended: ${j.status} (${j.downloaded} done)`, j.status !== "done");
+      }
       setTimeout(load, 700);
     }
   };

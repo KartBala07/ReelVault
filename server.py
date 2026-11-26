@@ -24,7 +24,7 @@ import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from reelvault import ig, library, session
+from reelvault import captions, ig, library, session
 from reelvault.jobs import JobManager
 from reelvault.store import Store
 
@@ -42,6 +42,20 @@ for d in (ROOT, DATA):
 STORE = Store(DB)
 JOBS = JobManager()
 USER_RE = re.compile(r"^[A-Za-z0-9._]{1,30}$")
+
+
+def _reap_orphaned_jobs():
+    """A restart kills in-flight work; a 'running' row left behind makes every
+    later job for that account fail with 409."""
+    try:
+        for j in STORE.running_jobs():
+            STORE.update_job(j["id"], status="interrupted", finished_at=time.time())
+    except Exception:
+        pass
+
+
+_reap_orphaned_jobs()
+
 
 
 # --------------------------------------------------------------------------- utils
@@ -68,6 +82,10 @@ def subprocess_env():
 
 
 def lib_dir(username):
+    # A NUL or a path separator here used to crash the request thread with
+    # "embedded null byte"; reject anything that is not a plain handle.
+    if not USER_RE.match(username or ""):
+        raise ValueError("invalid account name")
     return os.path.join(DATA, username)
 
 
@@ -290,6 +308,9 @@ class Handler(BaseHTTPRequestHandler):
         m = re.match(r"^/api/accounts/(\d+)/post$", p)
         if m:
             return self.api_post(int(m.group(1)))
+        m = re.match(r"^/api/accounts/(\d+)/preview$", p)
+        if m:
+            return self.api_preview(int(m.group(1)))
         m = re.match(r"^/api/accounts/(\d+)/scrape$", p)
         if m:
             return self.api_scrape(int(m.group(1)))
@@ -315,6 +336,7 @@ class Handler(BaseHTTPRequestHandler):
     def api_state(self):
         gd_ok, gd_ver = ig.have_gallery_dl()
         yt_ok, yt_ver = ig.have_ytdlp()
+        st = ig.session_state(JAR)
         accounts = []
         for a in STORE.accounts():
             d = lib_dir(a["username"])
@@ -334,19 +356,38 @@ class Handler(BaseHTTPRequestHandler):
             "deps": {"gallery_dl": {"ok": gd_ok, "version": gd_ver},
                      "yt_dlp": {"ok": yt_ok, "version": yt_ver},
                      "ffmpeg": bool(ffmpeg_bin())},
-            "session": {"present": os.path.exists(JAR), "logged_in": ig.logged_in(JAR)},
+            "session": st,
+            "caption": {"template": captions.DEFAULT_TEMPLATE,
+                        "limit": captions.MAX_CAPTION},
         })
 
     def api_session_status(self):
-        return self.json({"present": os.path.exists(JAR), "logged_in": ig.logged_in(JAR)})
+        st = ig.session_state(JAR)
+        return self.json(dict(st, present=os.path.exists(JAR)))
 
     def api_session_import(self):
+        """Copy the browser's Instagram cookies, then re-clone the Firefox
+        profile so the poster picks up the same (fresh) login."""
         body = self.body()
         try:
             browser, profile, keys = session.import_jar(JAR)
         except Exception as e:
             return self.json({"ok": False, "error": str(e)}, 400)
-        return self.json({"ok": True, "browser": browser, "profile": profile, "keys": keys})
+        ig._STATE.update(at=0.0, value=None)
+        refreshed, note = False, ""
+        try:
+            from reelvault.poster import Poster
+            posting = [j for j in JOBS.jobs.values()
+                       if j.mode == "post" and j.status == "running"]
+            if posting:
+                note = "a post is running — profile clone left alone"
+            else:
+                Poster.refresh_profile()
+                refreshed = True
+        except Exception as e:
+            note = "cookie import ok, profile clone skipped: %s" % str(e)[:120]
+        return self.json({"ok": True, "browser": browser, "profile": profile,
+                          "keys": keys, "profile_refreshed": refreshed, "note": note})
 
     def api_add_account(self):
         body = self.body()
@@ -445,8 +486,13 @@ class Handler(BaseHTTPRequestHandler):
         acc = STORE.account_by_id(aid)
         if not acc:
             return self.json({"ok": False, "error": "no such account"}, 404)
-        if STORE.active_job(aid):
-            return self.json({"ok": False, "error": "a job is already running for this account"}, 409)
+        live = STORE.active_job(aid)
+        if live:
+            j = JOBS.get(live["id"])
+            if j and j.status == "running":
+                return self.json({"ok": False, "error": "a job is already running for this account"}, 409)
+            # the process that owned this row is gone (server restart, crash)
+            STORE.update_job(live["id"], status="interrupted", finished_at=time.time())
 
         body = self.body()
         d = lib_dir(acc["username"])
@@ -464,6 +510,7 @@ class Handler(BaseHTTPRequestHandler):
 
         publish = bool(body.get("publish"))
         template = (body.get("template") or "").strip()
+        tags = (body.get("tags") or "").strip()
         result_path = os.path.join(ROOT, "post-result-%d.json" % int(time.time()))
         cmd = [sys.executable, "-m", "reelvault.post_cli",
                "--account", acc["username"], "--dir", d,
@@ -472,6 +519,10 @@ class Handler(BaseHTTPRequestHandler):
             cmd.append("--publish")
         if template:
             cmd += ["--template", template]
+        if tags:
+            cmd += ["--tags", tags]
+        if body.get("allow_unknown_account"):
+            cmd.append("--allow-unknown-account")
 
         jid = STORE.new_job(aid, len(files), len(files), "post")
         job = JOBS.create(jid=jid, account=acc["username"], dest=d, cmd=cmd,
@@ -506,11 +557,42 @@ class Handler(BaseHTTPRequestHandler):
         return self.json({"ok": True, "job": job.as_dict(), "publish": publish,
                           "queued": len(files)})
 
+    def api_preview(self, aid):
+        """Show exactly what would be published — no browser, no upload."""
+        acc = STORE.account_by_id(aid)
+        if not acc:
+            return self.json({"ok": False, "error": "no such account"}, 404)
+        body = self.body()
+        d = lib_dir(acc["username"])
+        have = [i["file"] for i in library.library(d)]
+        have_set = set(have)
+        files = body.get("files")
+        if not files:
+            posted = STORE.posted_for(aid)
+            files = [f for f in have if posted.get(f, {}).get("status") != "posted"]
+        files = [f for f in files if isinstance(f, str) and f in have_set]
+        files = files[:int(body.get("limit") or 5)]
+        template = (body.get("template") or "").strip()
+        tags = (body.get("tags") or "").strip()
+        items = []
+        for f in files:
+            meta = library._meta_for(os.path.join(d, f))
+            cap, info = captions.build(meta, template, tags, source=acc["username"])
+            items.append({"file": f, "caption": cap, "info": info,
+                          "original": (meta.get("description") or "").strip()[:2000]})
+        return self.json({"ok": True, "items": items, "count": len(items),
+                          "unposted": len([f for f in have
+                                           if STORE.posted_for(aid).get(f, {}).get("status") != "posted"]),
+                          "template": template or captions.DEFAULT_TEMPLATE})
+
     def api_posts(self, aid, q):
         acc = STORE.account_by_id(aid)
         if not acc:
             return self.json({"ok": False, "error": "no such account"}, 404)
-        items = library.library(lib_dir(acc["username"]))
+        try:
+            items = library.library(lib_dir(acc["username"]))
+        except (ValueError, OSError):
+            return self.json({"ok": False, "error": "bad account name"}, 400)
         offset = int((q.get("offset") or ["0"])[0])
         limit = int((q.get("limit") or ["60"])[0])
         return self.json({"ok": True, "total": len(items),

@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -54,6 +55,53 @@ def profile_total(jar_path, username):
 
 def logged_in(jar_path):
     return any(n in ("sessionid",) and v for n, v in jar_cookies(jar_path))
+
+
+_STATE = {"at": 0.0, "value": None}
+
+
+def session_state(jar_path, ttl=120):
+    """Can this cookie jar actually use Instagram right now?
+
+    A live-looking `sessionid` is not enough: Instagram will answer every
+    request with a redirect loop while the account sits behind a security
+    checkpoint ("Your email may not be secure"), which downloaders report as
+    `HTTP redirect to home page` and posters report as a missing button.
+    Cached briefly so /api/state polling does not hammer Instagram.
+    """
+    import time
+    now = time.time()
+    if _STATE["value"] and now - _STATE["at"] < ttl:
+        return _STATE["value"]
+    state = {"logged_in": logged_in(jar_path), "blocked": False, "reason": "",
+             "checked_at": now}
+    if not state["logged_in"]:
+        state["reason"] = "no Instagram session cookie in the jar"
+        _STATE.update(at=now, value=state)
+        return state
+    req = urllib.request.Request(
+        "https://www.instagram.com/",
+        headers={"Cookie": cookie_header(jar_path), "User-Agent": UA,
+                 "Accept-Language": "en-US,en;q=0.9"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            body = r.read(200000).decode("utf-8", "replace")
+            if "update_risky_contactpoint" in body or "Your email may not be secure" in body:
+                state["blocked"] = True
+                state["reason"] = "Instagram wants the account email updated"
+            elif "accounts/login" in (r.url or ""):
+                state["logged_in"] = False
+                state["reason"] = "Instagram served the login page"
+    except urllib.error.HTTPError as e:
+        if e.code in (301, 302, 303, 307, 308):
+            state["blocked"] = True
+            state["reason"] = "Instagram redirect-loops this session (security checkpoint)"
+        else:
+            state["reason"] = "HTTP %s" % e.code
+    except Exception as e:
+        state["reason"] = str(e)[:140]
+    _STATE.update(at=now, value=state)
+    return state
 
 
 def gallery_dl_cmd(jar_path, username, dest, archive, quality="720p",
