@@ -574,6 +574,7 @@ class Handler(BaseHTTPRequestHandler):
         files = files[:int(body.get("limit") or 5)]
         template = (body.get("template") or "").strip()
         tags = (body.get("tags") or "").strip()
+        posted = STORE.posted_for(aid)
         items = []
         for f in files:
             meta = library._meta_for(os.path.join(d, f))
@@ -582,7 +583,7 @@ class Handler(BaseHTTPRequestHandler):
                           "original": (meta.get("description") or "").strip()[:2000]})
         return self.json({"ok": True, "items": items, "count": len(items),
                           "unposted": len([f for f in have
-                                           if STORE.posted_for(aid).get(f, {}).get("status") != "posted"]),
+                                           if posted.get(f, {}).get("status") != "posted"]),
                           "template": template or captions.DEFAULT_TEMPLATE})
 
     def api_posts(self, aid, q):
